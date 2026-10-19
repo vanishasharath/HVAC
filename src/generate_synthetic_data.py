@@ -205,3 +205,23 @@ if __name__ == "__main__":
     df = build_dataset(n_healthy_sequences=40, n_leak_sequences=60)
     print("\nSample rows:")
     print(df.head(10))
+    
+    
+print("\n--- Sequence verification ---")
+
+print("Number of unique sequences:", df["sequence_id"].nunique())
+
+print("Sequence IDs:")
+print(sorted(df["sequence_id"].unique()))
+
+expected_ids = set(range(100))
+actual_ids = set(df["sequence_id"].unique())
+
+print("\nMissing sequence IDs:")
+print(sorted(expected_ids - actual_ids))
+
+print("\nUnexpected sequence IDs:")
+print(sorted(actual_ids - expected_ids))
+
+print("\nRows per sequence:")
+print(df.groupby("sequence_id").size())
