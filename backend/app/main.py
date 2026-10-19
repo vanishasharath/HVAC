@@ -58,6 +58,7 @@ app = FastAPI(
 )
 
 
+
 # Allow the React/Vite frontend to communicate with FastAPI.
 app.add_middleware(
     CORSMiddleware,
@@ -69,6 +70,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 register_exception_handlers(app)

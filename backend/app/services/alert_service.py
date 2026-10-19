@@ -122,6 +122,12 @@ async def evaluate_and_create_alert_from_pipeline_result(
         "severity": tier,
         "status": "ACTIVE",
         "source": source,
+        "message": f"Refrigerant leak {tier} alert on {hvac_id}",
+        "description": (
+            f"AI Model detected leak: RF severity={rf_severity} "
+            f"(confidence {pipeline_result.get('severity_confidence')}), "
+            f"anomaly_score={pipeline_result.get('anomaly_score')}"
+        ),
 
         # Real Random Forest result
         "rf_severity": rf_severity,
@@ -171,6 +177,77 @@ async def evaluate_and_create_alert_from_pipeline_result(
                 f"lstm_24hr={pipeline_result.get('lstm_prob_24hr')}, "
                 f"lstm_48hr={pipeline_result.get('lstm_prob_48hr')}"
             ),
+        )
+    except Exception:
+        pass
+
+    return serialized
+
+
+async def evaluate_and_create_alert_from_edge(
+    hvac_id: str,
+    event: str = "WARNING",
+    gas_alert: bool = True,
+    device_id: str = "ESP32",
+    details: dict | None = None,
+) -> dict | None:
+    """
+    Creates an alert when edge hardware (e.g. ESP32 MQ-5 sensor) flags a gas alert
+    or warning/risk status.
+    """
+    event_upper = (event or "").upper()
+    if event_upper in ["HIGH RISK", "CRITICAL"]:
+        tier = "CRITICAL"
+    elif event_upper == "PREDICTIVE":
+        tier = "PREDICTIVE"
+    else:
+        tier = "WARNING"
+
+    if await _has_recent_active_alert(hvac_id, tier):
+        return None
+
+    db = get_database()
+
+    alert_doc = {
+        "hvac_id": hvac_id,
+        "severity": tier,
+        "status": "ACTIVE",
+        "source": "edge_hardware",
+        "message": f"Gas leak alert ({tier}) detected by MQ-5 sensor on {hvac_id}",
+        "description": f"Hardware sensor triggered refrigerant gas alert. Event: {event}",
+        "device_id": device_id,
+        "rf_severity": None,
+        "rf_confidence": None,
+        "anomaly_score": None,
+        "anomaly_flag": 1,
+        "anomaly_duration": None,
+        "lstm_prob_24hr": None,
+        "lstm_prob_48hr": None,
+        "details": details or {},
+        "created_at": datetime.now(timezone.utc),
+        "resolved_at": None,
+        "resolved_by": None,
+    }
+
+    result = await db.alerts.insert_one(alert_doc)
+    alert_doc["_id"] = result.inserted_id
+
+    serialized = _serialize(alert_doc)
+
+    try:
+        await manager.broadcast_to_hvac(
+            hvac_id,
+            "alert_created",
+            serialized,
+        )
+    except Exception:
+        pass
+
+    try:
+        await notification_service.notify(
+            recipient=f"facility-manager:{hvac_id}",
+            title=f"{tier} Gas Alert - {hvac_id}",
+            message=f"MQ-5 Gas sensor detected refrigerant leak risk. Event: {event}",
         )
     except Exception:
         pass

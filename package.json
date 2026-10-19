@@ -1,1 +1,14 @@
-{ "name": "hvac-leak-detection-dev", "private": true, "scripts": { "dev": "concurrently -n BACKEND,FRONTEND,INFLUXDB -c blue,green,magenta \"npm:dev:backend\" \"npm:dev:frontend\" \"npm:dev:influxdb\"", "dev:backend": "cd backend && .\\ai-venv\\Scripts\\python.exe -m uvicorn app.main:app --reload", "dev:frontend": "cd frontend && npm run dev", "dev:influxdb": "C:\\InfluxDB\\influxd.exe" }, "devDependencies": { "concurrently": "^9.0.0" } }
+{
+  "name": "hvac-leak-detection-dev",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n BACKEND,FRONTEND -c blue,green \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:backend": "cd backend && .\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:influxdb": "C:\\InfluxDB\\influxd.exe",
+    "dev:all-with-influx": "concurrently -n BACKEND,FRONTEND,INFLUXDB -c blue,green,magenta \"npm:dev:backend\" \"npm:dev:frontend\" \"npm:dev:influxdb\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

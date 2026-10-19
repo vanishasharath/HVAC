@@ -28,6 +28,8 @@ class AlertOut(BaseModel):
     severity: AlertSeverity
     status: AlertStatus
     source: str
+    message: Optional[str] = None
+    description: Optional[str] = None
 
     # Raw outputs from the REAL pipeline (app/ai/real_pipeline.py) -
     # kept alongside the mapped `severity` tier above so nothing from the
