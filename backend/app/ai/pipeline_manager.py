@@ -25,11 +25,14 @@ BACKEND IMPLEMENTATION DECISION for later, not solved by this delivery.
 """
 
 import logging
+from collections import deque
+from datetime import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from app.ai.feature_engineering import StreamingFeatureEngineer
 from app.ai.real_pipeline import LeakDetectionPipeline, SensorStream
+from app.ai.trend_estimator import AITrendCriticalEstimator
 from app.config import settings
 
 logger = logging.getLogger("ai.pipeline_manager")
@@ -42,6 +45,7 @@ class PipelineManager:
         self._pipeline: LeakDetectionPipeline = None
         self._streams: Dict[str, SensorStream] = {}
         self._feature_engineers: Dict[str, StreamingFeatureEngineer] = {}
+        self._trend_estimators: Dict[str, AITrendCriticalEstimator] = {}
         self._last_results: Dict[str, dict] = {}
         self._load_error: str = None
 
@@ -68,42 +72,69 @@ class PipelineManager:
         if hvac_id not in self._streams:
             self._streams[hvac_id] = SensorStream(self._pipeline)
             self._feature_engineers[hvac_id] = StreamingFeatureEngineer()
-        return self._feature_engineers[hvac_id], self._streams[hvac_id]
+            self._trend_estimators[hvac_id] = AITrendCriticalEstimator()
+        return self._feature_engineers[hvac_id], self._streams[hvac_id], self._trend_estimators[hvac_id]
 
-    def process_reading(self, hvac_id: str, raw_reading: dict) -> dict:
+    def process_reading(
+        self,
+        hvac_id: str,
+        raw_reading: dict,
+        sensor_location: str = "suction_line",
+        timestamp: Optional[datetime] = None,
+        simulated_operating_seconds: Optional[float] = None,
+        is_repair: bool = False,
+    ) -> dict:
         """
         raw_reading: dict with gas_ppm, pressure, temperature, humidity,
         compressor_current (the 5 fields the backend already ingests).
 
-        Returns the real pipeline's full result dict:
+        Returns the real pipeline's full result dict augmented with:
             anomaly_score, anomaly_flag, anomaly_duration,
-            lstm_prob_24hr, lstm_prob_48hr, severity, severity_confidence
+            lstm_prob_24hr, lstm_prob_48hr, severity, severity_confidence,
+            critical_estimation (AI trend analysis in hours, elapsed time, and ETTC)
         """
         if not self.is_loaded:
             raise RuntimeError(
                 f"AI pipeline is not loaded (models_dir={self._models_dir}): {self._load_error}"
             )
 
-        feature_engineer, stream = self._get_or_create(hvac_id)
+        feature_engineer, stream, estimator = self._get_or_create(hvac_id)
+
+        # If this is a repair event, also reset the stream's anomaly duration
+        if is_repair:
+            stream.anomaly_duration = 0
+
         feature_row = feature_engineer.push_raw_reading(raw_reading)
         result = stream.push_reading(feature_row)
-        result["feature_row"] = feature_row  # useful for debugging/logging, not required downstream
+        result["feature_row"] = feature_row
+
+        # Compute AI trend analysis and elapsed time to critical condition (in hours)
+        trend_estimate = estimator.update(
+            raw_reading=raw_reading,
+            ai_pipeline_result=result,
+            timestamp=timestamp,
+            sensor_location=sensor_location,
+            simulated_operating_seconds=simulated_operating_seconds,
+            is_repair=is_repair,
+        )
+        result["critical_estimation"] = trend_estimate
+
         self._last_results[hvac_id] = result
         return result
 
     def get_last_result(self, hvac_id: str) -> dict:
         """Returns the most recent real pipeline output for this unit, or
-        None if no reading has been ingested for it yet. Used by
-        GET /predict and GET /forecast so those on-demand routes surface
-        the real, current AI state without re-running inference or
-        disturbing the LSTM buffer / anomaly-duration counter."""
+        None if no reading has been ingested for it yet."""
         return self._last_results.get(hvac_id)
 
     def reset_hvac_state(self, hvac_id: str) -> None:
-        """Clears buffered state for one unit - e.g. after a confirmed repair,
-        so old leak-window history doesn't linger into fresh readings."""
+        """Clears buffered state for one unit - e.g. after a confirmed repair."""
         self._streams.pop(hvac_id, None)
         self._feature_engineers.pop(hvac_id, None)
+        if hvac_id in self._trend_estimators:
+            self._trend_estimators[hvac_id].reset()
+            self._trend_estimators.pop(hvac_id, None)
+        self._last_results.pop(hvac_id, None)
 
 
 # Single shared instance, loaded once at import time.

@@ -26,5 +26,8 @@ async def predict_anomaly(hvac_id: str) -> dict:
         "anomaly_score": result["anomaly_score"],
         "anomaly_flag": result["anomaly_flag"],
         "anomaly_duration": result["anomaly_duration"],
+        "severity": result.get("severity"),
+        "severity_confidence": result.get("severity_confidence"),
         "status": "ANOMALY" if result["anomaly_flag"] == 1 else "NORMAL",
+        "critical_estimation": result.get("critical_estimation"),
     }

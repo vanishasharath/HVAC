@@ -28,6 +28,7 @@ class AlertOut(BaseModel):
     severity: AlertSeverity
     status: AlertStatus
     source: str
+    alert_type: Optional[str] = None
     message: Optional[str] = None
     description: Optional[str] = None
 

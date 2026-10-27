@@ -87,6 +87,31 @@ copy .env.example .env
 uvicorn app.main:app --reload
 ```
 
-Check `/health` — it now reports `"ai_pipeline_loaded": true` if all 4 model files loaded correctly. If it's `false`, check the startup log for exactly which file failed and why.
+Check `/health` — it now reports `"ai_pipeline_loaded": true` if all 4 model files loaded correctly.
 
-Then run `python scripts/simulate_sensor_data.py` against your real MongoDB/InfluxDB to see the full pipeline fire real alerts as the simulated leak progresses.
+### Live Simulator & AI Trend Estimation:
+
+Run the physics-informed live simulator with location-specific pressure and contextual humidity:
+
+```bash
+# Standard suction-line leak with stable humidity:
+python scripts/simulate_sensor_data.py --location suction_line --humidity stable --leak-rate medium
+
+# High-side discharge line transducer with fluctuating ambient humidity:
+python scripts/simulate_sensor_data.py --location discharge_line --humidity fluctuating --leak-rate fast
+
+# Indoor supply plenum transducer with humid monsoon context:
+python scripts/simulate_sensor_data.py --location indoor_ambient_plenum --humidity humid --leak-rate slow
+```
+
+**Simulation Features:**
+1. **Progressive Gas Concentration**: Progressively climbs from baseline 5.0 ppm up to critical thresholds (400+ ppm).
+2. **Pressure Behavior by Sensor Location**:
+   - `suction_line` (Low-side): Drops progressively from 165 down to ~105 psi as charge depletes.
+   - `discharge_line` (High-side): Initial superheat/compressor strain surge (+18 psi) followed by head pressure collapse down to ~290 psi.
+   - `liquid_line` (Condenser exit): Subcooling loss creates vapor bubbles and pressure flutter.
+   - `indoor_ambient_plenum` (Supply duct): Atmospheric air pressure remains steady (~14.7 psi) while gas concentration climbs.
+3. **Gradual Supply-Air Temperature Rise**: Models loss of cooling capacity as supply air leaving the coil rises from 7.0°C up to room temperature (≥ 22.0°C indicates cooling failure).
+4. **Contextual Humidity**: Kept as an independent ambient variable (`stable`, `humid`, `dry`, `fluctuating`, `random_walk`), decoupled from the leak progression.
+5. **AI Trend Estimation (ETTC)**: AI tracks elapsed time and rates of change ($d(\text{gas})/dt$, $d(T)/dt$, $d(P)/dt$) to project the Estimated Time to Critical Condition in real time.
+

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import alerts, auth, forecasts, hvac, predictions, reports, sensors, users, websocket
+from app.api import alerts, auth, forecasts, hvac, predictions, reports, sensors, simulator, users, websocket
 from app.config import settings
 from app.database.influxdb import close_influx_connection, connect_to_influx
 from app.database.mongodb import close_mongo_connection, connect_to_mongo
@@ -84,6 +84,7 @@ app.include_router(forecasts.router)
 app.include_router(alerts.router)
 app.include_router(reports.router)
 app.include_router(websocket.router)
+app.include_router(simulator.router)
 
 
 @app.get("/")

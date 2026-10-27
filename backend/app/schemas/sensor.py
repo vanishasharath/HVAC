@@ -23,6 +23,9 @@ class SensorReadings(BaseModel):
     # kept as extra raw data. NDIR sensor model still TBD.
     refrigerant_ppm: Optional[float] = Field(default=None, ge=0)
     mq5_adc: Optional[float] = None
+    supply_air_temperature: Optional[float] = None
+    location_pressure: Optional[float] = None
+    sensor_location: Optional[str] = None
 
 
 class SensorDataIn(BaseModel):
@@ -37,7 +40,15 @@ class SensorDataIn(BaseModel):
     edge_anomaly_score: Optional[float] = Field(default=None, ge=0, le=1)
     source: str = "unknown"
     schema_version: str = "1.0"
+    sensor_location: Optional[str] = "suction_line"
+    humidity_context: Optional[str] = None
+    simulated_elapsed_seconds: Optional[float] = None
+    simulated_operating_seconds: Optional[float] = None
+    is_repair: Optional[bool] = False
     gas_alert: Optional[bool] = None
+    temperature_alert: Optional[bool] = None
+    humidity_alert: Optional[bool] = None
+    current_alert: Optional[bool] = None
 
 
 class SensorDataStoredOut(BaseModel):

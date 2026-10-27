@@ -315,6 +315,9 @@ void sendSensorData() {
   sensors["gas_ppm"] = gasPpm;
   sensors["mq5_adc"] = mq5Raw;
   doc["gas_alert"] = gasRisk;
+  doc["temperature_alert"] = temperatureRisk;
+  doc["humidity_alert"] = humidityRisk;
+  doc["current_alert"] = currentRisk;
   if (dhtConnected) {
     sensors["temperature"] = temperature;
     sensors["humidity"] = humidity;

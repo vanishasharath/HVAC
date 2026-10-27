@@ -4,6 +4,7 @@ import ProtectedRoute from './auth/ProtectedRoute'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
+import SimulatorDashboard from './pages/SimulatorDashboard'
 import AdminUsers from './pages/AdminUsers'
 
 function App() {
@@ -22,6 +23,15 @@ function App() {
             element={
               <ProtectedRoute>
                 <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/simulator"
+            element={
+              <ProtectedRoute>
+                <SimulatorDashboard />
               </ProtectedRoute>
             }
           />

@@ -51,21 +51,25 @@ def _serialize(alert: dict) -> dict:
     return alert
 
 
-async def _has_recent_active_alert(hvac_id: str, severity: str) -> bool:
+async def _has_recent_active_alert(hvac_id: str, severity: str, alert_type: str | None = None) -> bool:
     db = get_database()
+    if db is None:
+        return False
 
     cutoff = datetime.now(timezone.utc) - timedelta(
         minutes=_DEDUP_WINDOW_MINUTES
     )
 
-    existing = await db.alerts.find_one(
-        {
-            "hvac_id": hvac_id,
-            "severity": severity,
-            "status": "ACTIVE",
-            "created_at": {"$gte": cutoff},
-        }
-    )
+    query = {
+        "hvac_id": hvac_id,
+        "severity": severity,
+        "status": "ACTIVE",
+        "created_at": {"$gte": cutoff},
+    }
+    if alert_type:
+        query["alert_type"] = alert_type
+
+    existing = await db.alerts.find_one(query)
 
     return existing is not None
 
@@ -112,16 +116,19 @@ async def evaluate_and_create_alert_from_pipeline_result(
     #
     # This prevents one ongoing leak from creating dozens of
     # identical CRITICAL alerts.
-    if await _has_recent_active_alert(hvac_id, tier):
+    if await _has_recent_active_alert(hvac_id, tier, alert_type="ai_leak"):
         return None
 
     db = get_database()
+    if db is None:
+        return None
 
     alert_doc = {
         "hvac_id": hvac_id,
         "severity": tier,
         "status": "ACTIVE",
         "source": source,
+        "alert_type": "ai_leak",
         "message": f"Refrigerant leak {tier} alert on {hvac_id}",
         "description": (
             f"AI Model detected leak: RF severity={rf_severity} "
@@ -187,23 +194,40 @@ async def evaluate_and_create_alert_from_pipeline_result(
 async def evaluate_and_create_alert_from_edge(
     hvac_id: str,
     event: str = "WARNING",
-    gas_alert: bool = True,
+    alert_type: str = "gas",
     device_id: str = "ESP32",
     details: dict | None = None,
 ) -> dict | None:
     """
-    Creates an alert when edge hardware (e.g. ESP32 MQ-5 sensor) flags a gas alert
-    or warning/risk status.
+    Creates an alert when edge hardware flags a condition (temperature, gas, etc).
     """
     event_upper = (event or "").upper()
-    if event_upper in ["HIGH RISK", "CRITICAL"]:
-        tier = "CRITICAL"
-    elif event_upper == "PREDICTIVE":
-        tier = "PREDICTIVE"
-    else:
-        tier = "WARNING"
+    temp_val = details.get("temperature") if details else None
 
-    if await _has_recent_active_alert(hvac_id, tier):
+    if alert_type == "temperature":
+        if event_upper in ["HIGH RISK", "CRITICAL"] or (temp_val is not None and temp_val >= 40.0):
+            tier = "CRITICAL"
+        else:
+            tier = "WARNING"
+        temp_str = f" ({temp_val:.1f}°C)" if temp_val is not None else ""
+        message = f"High Temperature Alert ({tier}) on {hvac_id}{temp_str}"
+        description = f"Hardware sensor reported abnormal temperature{temp_str}. Exceeds safe limit. Event: {event}"
+        notify_title = f"{tier} Temperature Alert - {hvac_id}"
+        notify_message = f"Temperature sensor reported abnormal temperature{temp_str}. Event: {event}"
+    else:
+        alert_type = "gas"
+        if event_upper in ["HIGH RISK", "CRITICAL"]:
+            tier = "CRITICAL"
+        elif event_upper == "PREDICTIVE":
+            tier = "PREDICTIVE"
+        else:
+            tier = "WARNING"
+        message = f"Gas leak alert ({tier}) detected by MQ-5 sensor on {hvac_id}"
+        description = f"Hardware sensor triggered refrigerant gas alert. Event: {event}"
+        notify_title = f"{tier} Gas Alert - {hvac_id}"
+        notify_message = f"MQ-5 Gas sensor detected refrigerant leak risk. Event: {event}"
+
+    if await _has_recent_active_alert(hvac_id, tier, alert_type=alert_type):
         return None
 
     db = get_database()
@@ -213,8 +237,9 @@ async def evaluate_and_create_alert_from_edge(
         "severity": tier,
         "status": "ACTIVE",
         "source": "edge_hardware",
-        "message": f"Gas leak alert ({tier}) detected by MQ-5 sensor on {hvac_id}",
-        "description": f"Hardware sensor triggered refrigerant gas alert. Event: {event}",
+        "alert_type": alert_type,
+        "message": message,
+        "description": description,
         "device_id": device_id,
         "rf_severity": None,
         "rf_confidence": None,
@@ -246,8 +271,8 @@ async def evaluate_and_create_alert_from_edge(
     try:
         await notification_service.notify(
             recipient=f"facility-manager:{hvac_id}",
-            title=f"{tier} Gas Alert - {hvac_id}",
-            message=f"MQ-5 Gas sensor detected refrigerant leak risk. Event: {event}",
+            title=notify_title,
+            message=notify_message,
         )
     except Exception:
         pass
@@ -349,3 +374,33 @@ async def resolve_alert(
         pass
 
     return updated
+
+
+async def resolve_all_active_alerts_for_hvac(
+    hvac_id: str,
+    resolved_by: str = "technician_service",
+    resolution_note: str = "Leak repaired, system recharged and restored to healthy baseline",
+) -> list:
+    """Resolves all active alerts for the given HVAC unit (e.g. following repair)."""
+    db = get_database()
+    if db is None:
+        return []
+    now = datetime.now(timezone.utc)
+    cursor = db.alerts.find({"hvac_id": hvac_id, "status": "ACTIVE"})
+    active_alerts = await cursor.to_list(length=100)
+
+    resolved = []
+    for alert in active_alerts:
+        aid = str(alert["_id"])
+        await db.alerts.update_one(
+            {"_id": alert["_id"]},
+            {"$set": {"status": "RESOLVED", "resolved_at": now, "resolved_by": resolved_by, "resolution_note": resolution_note}},
+        )
+        updated = _serialize({**alert, "status": "RESOLVED", "resolved_at": now, "resolved_by": resolved_by})
+        resolved.append(updated)
+        try:
+            await manager.broadcast_to_hvac(hvac_id, "alert_resolved", updated)
+        except Exception:
+            pass
+
+    return resolved

@@ -30,4 +30,5 @@ async def forecast_leak_probability(hvac_id: str) -> dict:
         "lstm_prob_48hr": result["lstm_prob_48hr"],
         "forecast_ready": window_filled,
         "readings_buffered": len(stream.buffer) if stream else 0,
+        "critical_estimation": result.get("critical_estimation"),
     }
