@@ -9,6 +9,10 @@ logger = logging.getLogger("sensor_ingestion")
 
 
 async def ingest_sensor_data(data: SensorDataIn) -> dict:
+    from datetime import datetime
+    if data.timestamp is None:
+        data.timestamp = datetime.utcnow()
+
     # 0. Check edge alert states
     temp_val = data.sensors.temperature
     event_str = (data.event or "").upper()
@@ -33,14 +37,24 @@ async def ingest_sensor_data(data: SensorDataIn) -> dict:
     else:
         is_edge_gas_alert = False
 
-    # If gas_ppm was not provided directly, calculate or provide realistic value
-    if data.sensors.gas_ppm is None:
+    # Real-time safety override: if physical MQ-5 ADC or gas_ppm exceeds safe limits,
+    # unconditionally trigger a gas alert even if edge firmware sent event="NORMAL"
+    if (data.sensors.mq5_adc is not None and data.sensors.mq5_adc > 1150) or (data.sensors.gas_ppm is not None and data.sensors.gas_ppm >= 50.0):
+        is_edge_gas_alert = True
+
+    # If edge flagged a gas alert OR raw ADC indicates elevated concentration (> 1100),
+    # ensure gas_ppm correctly scales above the 50.0 ppm threshold
+    if is_edge_gas_alert or (data.sensors.mq5_adc is not None and data.sensors.mq5_adc > 1150):
+        if data.sensors.gas_ppm is None or data.sensors.gas_ppm < 50.0:
+            if data.sensors.mq5_adc is not None:
+                excess = max(0.0, float(data.sensors.mq5_adc) - 900.0)
+                data.sensors.gas_ppm = round(60.0 + excess * 0.4, 1)
+            else:
+                data.sensors.gas_ppm = 180.0 if event_str == "WARNING" else 350.0
+    elif data.sensors.gas_ppm is None:
         if data.sensors.mq5_adc is not None:
-            baseline = 1461.0
-            excess = max(0.0, float(data.sensors.mq5_adc) - baseline)
-            data.sensors.gas_ppm = round(5.0 + excess * 0.8, 2)
-        elif is_edge_gas_alert:
-            data.sensors.gas_ppm = 180.0 if event_str == "WARNING" else 350.0
+            excess = max(0.0, float(data.sensors.mq5_adc) - 900.0)
+            data.sensors.gas_ppm = round(5.0 + (excess / 180.0) * 15.0, 1)
         else:
             data.sensors.gas_ppm = 5.0
 
@@ -68,6 +82,12 @@ async def ingest_sensor_data(data: SensorDataIn) -> dict:
             data.hvac_id,
         )
 
+    # Check if this reading is a repair event
+    is_repair = bool(data.is_repair or (data.event and data.event.lower() in ["repaired", "maintenance_completed"]))
+    tech_resolved_by = "Certified Field Technician"
+    if data.source and "technician_repair:" in data.source:
+        tech_resolved_by = data.source.split("technician_repair:", 1)[1]
+
     # 4. Broadcast the sensor reading and AI critical estimation to connected dashboards
     sensor_loc = data.sensor_location or getattr(data.sensors, "sensor_location", "suction_line")
     try:
@@ -85,6 +105,8 @@ async def ingest_sensor_data(data: SensorDataIn) -> dict:
                 "humidity_context": data.humidity_context,
                 "gas_alert": is_edge_gas_alert,
                 "temperature_alert": is_edge_temp_alert,
+                "is_repair": is_repair,
+                "repaired_by": tech_resolved_by if is_repair else None,
                 "ai_result": pipeline_result,
                 "critical_estimation": pipeline_result.get("critical_estimation") if pipeline_result else None,
             },
@@ -96,7 +118,7 @@ async def ingest_sensor_data(data: SensorDataIn) -> dict:
         )
 
     # 5. If edge hardware triggered alerts, evaluate edge alerts
-    if is_edge_temp_alert:
+    if is_edge_temp_alert and not is_repair:
         try:
             from app.services.alert_service import evaluate_and_create_alert_from_edge
             await evaluate_and_create_alert_from_edge(
@@ -112,12 +134,18 @@ async def ingest_sensor_data(data: SensorDataIn) -> dict:
                 data.hvac_id,
             )
 
-    if is_edge_gas_alert:
+    if is_edge_gas_alert and not is_repair:
         try:
             from app.services.alert_service import evaluate_and_create_alert_from_edge
+            is_crit = bool(
+                (data.sensors.mq5_adc is not None and data.sensors.mq5_adc >= 1200)
+                or (data.sensors.gas_ppm is not None and data.sensors.gas_ppm >= 100.0)
+                or event_str in ["CRITICAL", "HIGH RISK"]
+            )
+            edge_event = "CRITICAL" if is_crit else (data.event or "WARNING")
             await evaluate_and_create_alert_from_edge(
                 hvac_id=data.hvac_id,
-                event=data.event or "WARNING",
+                event=edge_event,
                 alert_type="gas",
                 device_id=data.device_id,
                 details={"sensors": sensor_values},
@@ -129,11 +157,14 @@ async def ingest_sensor_data(data: SensorDataIn) -> dict:
             )
 
     # If this reading is a repair event, resolve all active alerts for this HVAC unit
-    is_repair = bool(data.is_repair or (data.event and data.event.lower() in ["repaired", "maintenance_completed"]))
     if is_repair:
         try:
             from app.services.alert_service import resolve_all_active_alerts_for_hvac
-            await resolve_all_active_alerts_for_hvac(data.hvac_id)
+            await resolve_all_active_alerts_for_hvac(
+                data.hvac_id,
+                resolved_by=tech_resolved_by,
+                resolution_note=f"Refrigerant leak repaired by {tech_resolved_by}. Baseline charge and cooling restored.",
+            )
         except Exception:
             logger.exception("Failed to auto-resolve alerts on repair for hvac_id=%s", data.hvac_id)
 

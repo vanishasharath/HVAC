@@ -33,7 +33,7 @@ class SensorDataIn(BaseModel):
 
     device_id: str
     hvac_id: str
-    timestamp: datetime
+    timestamp: Optional[datetime] = Field(default_factory=datetime.utcnow)
     mode: str = "normal"
     event: Optional[str] = None
     sensors: SensorReadings

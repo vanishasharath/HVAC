@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
 
 function Register() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
+  const [phone, setPhone] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState('TECHNICIAN')
   const [error, setError] = useState('')
@@ -18,6 +19,15 @@ function Register() {
     e.preventDefault()
     setError('')
     setSuccess('')
+
+    // Normalize phone number (strip whitespace, parentheses, hyphens, dots)
+    const cleanedPhone = phone.replace(/[\s\(\)\-\.]/g, '')
+    const phoneRegex = /^\+[1-9]\d{7,14}$/
+    if (!phoneRegex.test(cleanedPhone)) {
+      setError('Please enter a valid international phone number starting with + (e.g. +14155552671).')
+      return
+    }
+
     setLoading(true)
 
     try {
@@ -30,6 +40,7 @@ function Register() {
           email,
           password,
           full_name: name,
+          phone_number: cleanedPhone,
           role,
         }),
       })
@@ -102,6 +113,23 @@ function Register() {
             placeholder="you@example.com"
             required
           />
+        </div>
+
+        <div>
+          <label className="block text-sm text-slate-600 mb-1">
+            Phone Number (with Country Code)
+          </label>
+          <input
+            type="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            className="w-full border border-slate-300 rounded-lg px-3 py-2"
+            placeholder="+14155552671"
+            required
+          />
+          <p className="text-xs text-slate-400 mt-1">
+            Include country code starting with '+' (e.g. +14155552671)
+          </p>
         </div>
 
         <div>

@@ -33,6 +33,8 @@ class SimulatorRepairRequest(BaseModel):
     hvac_id: str = "HVAC_SIM_01"
     sensor_location: str = Field(default="suction_line")
     humidity_context: str = Field(default="stable")
+    technician_name: Optional[str] = "Field Technician"
+    technician_email: Optional[str] = None
 
 
 @router.get("/config")
@@ -144,6 +146,7 @@ async def repair_simulation(req: SimulatorRepairRequest):
     )
     sensors, meta = sim.healthy_reading(step=0)
 
+    tech_id = req.technician_name or req.technician_email or "Field Technician"
     sensor_in = SensorDataIn(
         device_id=sim.device_id,
         hvac_id=req.hvac_id,
@@ -154,7 +157,7 @@ async def repair_simulation(req: SimulatorRepairRequest):
         sensor_location=req.sensor_location,
         humidity_context=req.humidity_context,
         is_repair=True,
-        source="technician_repair",
+        source=f"technician_repair:{tech_id}",
     )
 
     ingestion_result = await ingest_sensor_data(sensor_in)
@@ -166,7 +169,8 @@ async def repair_simulation(req: SimulatorRepairRequest):
 
     return {
         "success": True,
-        "message": f"HVAC Unit {req.hvac_id} successfully serviced and repaired. Refrigerant recharged, cooling restored.",
+        "message": f"HVAC Unit {req.hvac_id} successfully serviced and repaired by {tech_id}. Refrigerant recharged, cooling restored.",
+        "repaired_by": tech_id,
         "sensors": sensors,
         "location_metadata": meta,
         "ai_result": ingestion_result.get("ai_result"),

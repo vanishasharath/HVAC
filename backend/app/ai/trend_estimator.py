@@ -27,7 +27,7 @@ import numpy as np
 # Defined simulated critical condition thresholds
 CRITICAL_THRESHOLDS = {
     "gas_ppm": 400.0,            # Safety escalation threshold (ppm R-32)
-    "temperature": 22.0,         # Supply-air temp indicating total cooling failure (deg C)
+    "temperature": 35.0,         # Ambient/chiller overheat limit (deg C)
     "pressure_low_side": 105.0,  # Suction pressure cavitation/starvation limit (psi)
     "rf_severity": "Critical",   # AI classifier critical tier
 }
@@ -147,7 +147,7 @@ class AITrendCriticalEstimator:
             )
 
         # Physical threshold anomaly trigger
-        if gas_ppm > 25.0 or temp > 12.0 or (sensor_location == "suction_line" and pressure < 145.0):
+        if gas_ppm > 25.0 or temp > 32.0 or (sensor_location == "suction_line" and pressure < 145.0):
             is_anomalous = True
 
         if is_anomalous:

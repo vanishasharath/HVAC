@@ -320,7 +320,19 @@ function SimulatorDashboard() {
           )}
 
           <button
-            onClick={() => exportDashboardPdf(readings, alerts)}
+            onClick={() =>
+              exportDashboardPdf({
+                readings,
+                alerts,
+                hvacId: HVAC_ID,
+                lastReading,
+                criticalEstimation,
+                aiResult,
+                isRepaired: Boolean(criticalEstimation?.is_repaired || lastReading?.is_repaired),
+                isCritical: Boolean(criticalEstimation?.critical_reached),
+                user,
+              })
+            }
             className="bg-blue-600 text-white text-sm font-semibold px-3.5 py-1.5 rounded-lg hover:bg-blue-700 transition shadow-sm"
           >
             Export Report
