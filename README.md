@@ -1,5 +1,11 @@
 # AI-Powered Predictive Refrigerant Leak Detection and Smart HVAC Monitoring System
 
+# Team Members:
+- Dhruvi.V
+- Rishika C Datta
+- Swetha R
+- Vanisha Sharath
+
 ## Overview
 
 The **AI-Powered Predictive Refrigerant Leak Detection and Smart HVAC Monitoring System** is a full-stack application designed to monitor HVAC operating conditions, detect potential refrigerant leaks, predict future leak risks, and generate alerts based on the severity of detected anomalies.
@@ -346,3 +352,48 @@ These tests cover selected pipeline behaviors. Passing unit tests does not by it
 This project integrates machine learning and full-stack development to support predictive refrigerant leak monitoring in HVAC systems. By combining anomaly detection, future leak probability estimation, severity classification, and alert generation, the system provides a foundation for proactive HVAC maintenance and improved operational monitoring.
 
 **Note:** AI predictions are decision-support outputs and should not be treated as a substitute for physical inspection, calibrated leak detection equipment, or appropriate safety procedures.
+
+## Real-World Applications and Societal Impact
+
+### 1. Real-World Applications
+
+1. **Residential Buildings:** The system can be used in homes and apartments to monitor air-conditioning systems and detect refrigerant leaks early, improving household safety and preventing unnecessary energy consumption.
+
+2. **Commercial Buildings:** Shopping malls, offices, hotels, and hospitals can use the system to continuously monitor HVAC units and identify refrigerant leakage before it leads to major equipment failures.
+
+3. **Industrial Facilities:** Factories, warehouses, and manufacturing plants that rely on large-scale refrigeration and cooling systems can use predictive monitoring to minimize equipment downtime and maintenance costs.
+
+4. **Cold Storage and Food Preservation:** Refrigeration systems used in food storage facilities can be monitored to prevent refrigerant leakage that may affect cooling efficiency and compromise stored products.
+
+5. **Predictive Maintenance:** The AI-based pipeline analyzes sensor data using:
+   - Isolation Forest for anomaly detection.
+   - LSTM for forecasting future leak probabilities.
+   - Random Forest for classifying leak severity into Low, Medium, High, and Critical categories.
+
+   This enables maintenance teams to take preventive action instead of relying only on periodic inspections.
+
+### 2. Societal Impact
+
+| Impact Area | Contribution |
+|---|---|
+| Environmental Protection | Helps reduce refrigerant emissions, which can contribute to global warming. |
+| Energy Efficiency | Early leak detection helps HVAC systems maintain cooling efficiency and avoid excessive energy consumption. |
+| Human Safety | Early warnings can help reduce exposure to potentially harmful refrigerants and associated risks. |
+| Economic Benefits | Reduces repair expenses, refrigerant replacement costs, and equipment downtime. |
+| Food Security | Helps maintain reliable refrigeration in food storage and cold-chain facilities. |
+| Sustainable Development | Supports energy-efficient infrastructure and environmentally responsible HVAC operations. |
+
+### 3. Contribution to Sustainable Development Goals (SDGs)
+
+- **SDG 3 – Good Health and Well-being:** Promotes safer indoor environments through early detection of refrigerant leaks.
+- **SDG 9 – Industry, Innovation and Infrastructure:** Encourages the adoption of AI and IoT technologies in industrial monitoring and predictive maintenance.
+- **SDG 12 – Responsible Consumption and Production:** Supports responsible refrigerant usage by identifying leaks and reducing avoidable refrigerant loss.
+- **SDG 13 – Climate Action:** Helps minimize the environmental impact of refrigerant emissions through early detection and preventive maintenance.
+
+### 4. Overall Societal Significance
+
+The project moves HVAC maintenance from a traditional reactive approach toward an intelligent, predictive approach. Instead of identifying refrigerant leakage only after noticeable performance degradation or manual inspection, the system uses continuous sensor monitoring and AI-based predictions to identify potential problems earlier.
+
+By combining IoT, machine learning, and predictive analytics, the proposed solution has the potential to improve operational efficiency, reduce maintenance costs, enhance safety, and contribute to environmental sustainability.
+
+The current implementation demonstrates these capabilities through sensor inputs and an AI-based detection pipeline. Its effectiveness in actual buildings would require real-world deployment, validation with physical refrigerant leak sensors, and testing under different environmental conditions.
