@@ -21,6 +21,7 @@ reconciliation between the ML output granularity and the report's alert
 terminology, not an oversight.
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
@@ -31,10 +32,12 @@ from app.database.mongodb import get_database
 from app.services.notification_service import notification_service
 from app.websocket.manager import manager
 
+logger = logging.getLogger("alerts")
+
 
 # Prevent repeated alerts for the same HVAC unit/severity
-# within this time window.
-_DEDUP_WINDOW_MINUTES = 10
+# within this time window (tuned to 1 minute for responsive real-time testing).
+_DEDUP_WINDOW_MINUTES = 1
 
 
 SEVERITY_TIER_MAP = {
@@ -49,6 +52,97 @@ def _serialize(alert: dict) -> dict:
     alert = dict(alert)
     alert["id"] = str(alert.pop("_id"))
     return alert
+
+
+async def _send_admin_sms_for_alert(
+    hvac_id: str,
+    severity_label: str,
+    tier: str,
+    summary_text: str = "",
+    alert_id: str | ObjectId | None = None,
+) -> None:
+    """
+    Identifies Admin users with registered phone numbers in MongoDB,
+    and sends SMS notifications via TextBee/Twilio without failing the main flow.
+    Ensures SMS is sent once per critical leak event (60-second flood protection).
+    """
+    try:
+        db = get_database()
+        if db is None:
+            return
+
+        # Check if an SMS was ALREADY sent for an ongoing ACTIVE alert within the last 60 seconds.
+        # This prevents spamming on continuous 5-second sensor uploads while allowing live testing.
+        recent_cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
+        existing_active_sms = await db.alerts.find_one({
+            "hvac_id": hvac_id,
+            "status": "ACTIVE",
+            "sms_sent": True,
+            "created_at": {"$gte": recent_cutoff},
+        })
+        if existing_active_sms:
+            logger.info(
+                "SMS already sent recently for active alert on %s (Alert ID: %s); skipping duplicate SMS.",
+                hvac_id,
+                existing_active_sms.get("_id"),
+            )
+            return
+
+        cursor = db.users.find({
+            "role": "ADMIN",
+            "phone_number": {"$exists": True, "$ne": None, "$ne": ""},
+        })
+        admins = await cursor.to_list(length=100)
+
+        if not admins:
+            logger.warning(
+                "No Admin account with a registered phone number found in MongoDB; SMS alert skipped for %s alert on %s",
+                severity_label,
+                hvac_id,
+            )
+            return
+
+        # Deduplicate phone numbers so multiple Admin accounts sharing a number receive ONLY ONE SMS
+        unique_phones = []
+        seen_phones = set()
+        for admin in admins:
+            phone = admin.get("phone_number")
+            if phone and phone not in seen_phones:
+                seen_phones.add(phone)
+                unique_phones.append(phone)
+
+        if not unique_phones:
+            return
+
+        title = f"CRITICAL HVAC ALERT: {hvac_id}" if tier == "CRITICAL" else f"HIGH LEAK RISK: {hvac_id}"
+        message = (
+            f"HVAC Unit {hvac_id} triggered a {severity_label} ({tier}) refrigerant alert. "
+            f"Immediate inspection required. {summary_text}".strip()
+        )
+
+        sms_dispatched = False
+        for phone in unique_phones:
+            try:
+                sent = await notification_service.send_sms(
+                    recipient=phone,
+                    title=title,
+                    message=message,
+                )
+                if sent:
+                    sms_dispatched = True
+            except Exception as exc:
+                logger.error("Failed to send admin alert SMS to %s: %s", phone, exc)
+
+        # Mark sms_sent on the current alert document in MongoDB
+        if sms_dispatched and alert_id:
+            try:
+                oid = ObjectId(alert_id) if not isinstance(alert_id, ObjectId) else alert_id
+                await db.alerts.update_one({"_id": oid}, {"$set": {"sms_sent": True}})
+            except Exception as exc:
+                logger.warning("Failed to mark sms_sent on alert %s: %s", alert_id, exc)
+
+    except Exception as exc:
+        logger.error("Error during admin SMS alert dispatch: %s", exc)
 
 
 async def _has_recent_active_alert(hvac_id: str, severity: str, alert_type: str | None = None) -> bool:
@@ -150,6 +244,7 @@ async def evaluate_and_create_alert_from_pipeline_result(
         "lstm_prob_48hr": pipeline_result.get("lstm_prob_48hr"),
 
         # Alert lifecycle fields
+        "sms_sent": False,
         "created_at": datetime.now(timezone.utc),
         "resolved_at": None,
         "resolved_by": None,
@@ -187,6 +282,23 @@ async def evaluate_and_create_alert_from_pipeline_result(
         )
     except Exception:
         pass
+
+    # For High or Critical severity, send SMS alerts to all registered Admins (only once per incident)
+    if rf_severity in ["High", "Critical"] or tier in ["PREDICTIVE", "CRITICAL"]:
+        try:
+            summary = (
+                f"Confidence: {pipeline_result.get('severity_confidence')}, "
+                f"Anomaly Score: {pipeline_result.get('anomaly_score')}"
+            )
+            await _send_admin_sms_for_alert(
+                hvac_id=hvac_id,
+                severity_label=rf_severity,
+                tier=tier,
+                summary_text=summary,
+                alert_id=alert_doc["_id"],
+            )
+        except Exception:
+            pass
 
     return serialized
 
@@ -249,6 +361,7 @@ async def evaluate_and_create_alert_from_edge(
         "lstm_prob_24hr": None,
         "lstm_prob_48hr": None,
         "details": details or {},
+        "sms_sent": False,
         "created_at": datetime.now(timezone.utc),
         "resolved_at": None,
         "resolved_by": None,
@@ -276,6 +389,19 @@ async def evaluate_and_create_alert_from_edge(
         )
     except Exception:
         pass
+
+    # For CRITICAL hardware alerts, send SMS alerts to all registered Admins (only once per incident)
+    if tier == "CRITICAL":
+        try:
+            await _send_admin_sms_for_alert(
+                hvac_id=hvac_id,
+                severity_label="Critical",
+                tier=tier,
+                summary_text=notify_message,
+                alert_id=alert_doc["_id"],
+            )
+        except Exception:
+            pass
 
     return serialized
 

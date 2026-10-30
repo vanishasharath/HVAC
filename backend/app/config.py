@@ -20,6 +20,18 @@ class Settings(BaseSettings):
 
     ingestion_api_key: str = "dev-only-ingestion-key"
 
+    # ---- SMS Gateway Configuration ("textbee" or "twilio") ----
+    sms_provider: str = "textbee"
+
+    # TextBee SMS gateway settings (Android Gateway)
+    textbee_api_key: str | None = None
+    textbee_device_id: str | None = None
+
+    # Twilio SMS configuration
+    twilio_account_sid: str | None = None
+    twilio_auth_token: str | None = None
+    twilio_from_number: str | None = None
+
     # ---- AI model directory - now points at the REAL trained models ----
     model_dir: str = "app/ai/models"
 

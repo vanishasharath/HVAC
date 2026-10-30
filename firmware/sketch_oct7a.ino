@@ -8,11 +8,11 @@
 #include <ArduinoJson.h>
 #include <time.h>
 // ================= PIN DEFINITIONS =================
-const char* WIFI_SSID = "Aizen";
-const char* WIFI_PASSWORD = "air02108";
+const char* WIFI_SSID = "Swetha";
+const char* WIFI_PASSWORD = "Swetha!11";
 
 const char* API_URL =
-  "http://192.168.1.7:8000/api/v1/ingestion/sensor-data";
+  "http://10.192.146.163:8000/api/v1/ingestion/sensor-data";
 
 const char* API_KEY = "dev-only-ingestion-key";
 
@@ -25,6 +25,14 @@ const char* HVAC_ID = "HVAC_TEST_01";
 #define ACS_PIN 35
 #define PRESSURE_PIN 32
 #define BUZZER_PIN 25
+
+// Buzzer module polarity configuration:
+// Most 3-pin Arduino/ESP32 buzzer modules (with PNP transistor) are ACTIVE-LOW:
+// LOW (0V) = Sound ALARM ON.
+// HIGH (3.3V) = Sound SILENT OFF.
+const bool BUZZER_ACTIVE_LOW = true;
+#define BUZZER_SOUND_ON   (BUZZER_ACTIVE_LOW ? LOW : HIGH)
+#define BUZZER_SOUND_OFF  (BUZZER_ACTIVE_LOW ? HIGH : LOW)
 
 #define OLED_SDA 21
 #define OLED_SCL 22
@@ -49,8 +57,8 @@ DHT dht(DHT_PIN, DHT_TYPE);
 const float ACS_SENSITIVITY = 0.100;
 
 // Set according to your calibration.
-// This is a starting value, not a universal threshold.
-const int MQ5_RISE_THRESHOLD = 350;
+// Tuned to 120 for instant, highly sensitive refrigerant gas detection above clean baseline
+const int MQ5_RISE_THRESHOLD = 120;
 
 const float TEMP_LIMIT = 35.0;
 const float HUMIDITY_LIMIT = 80.0;
@@ -76,6 +84,7 @@ float currentZeroVoltage = 1.65;
 
 int mq5Raw = 0;
 int mq5Baseline = 0;
+float gasPpm = 5.0;
 
 // PR2010 pressure variables
 float adcVoltage = 0.0;
@@ -93,7 +102,7 @@ bool currentCalibrated = false;
 bool mqCalibrated = false;
 
 bool simulatedTest = false;
-char testMode = 'N';
+char testMode = 'X'; // Start in live physical sensor mode
 
 int page = 0;
 unsigned long lastPageChange = 0;
@@ -183,6 +192,11 @@ void calibrateMQ5() {
   }
 
   mq5Baseline = total / samples;
+  // If baseline was sampled while the sensor coil was still cold (< 750),
+  // initialize to standard warm clean-air resting value so it doesn't false-trigger.
+  if (mq5Baseline < 750) {
+    mq5Baseline = 900;
+  }
   mqCalibrated = true;
 
   Serial.print("MQ5 baseline ADC: ");
@@ -237,10 +251,19 @@ void readTestCommand() {
       Serial.print("Test mode: ");
       Serial.println(c);
     }
+
+    if (c == 'K' || c == 'R') {
+      Serial.println("\n[CALIBRATION] Re-calibrating MQ-5 baseline with current warm sensor...");
+      calibrateMQ5();
+      Serial.print("[CALIBRATION] New warm baseline ADC: ");
+      Serial.println(mq5Baseline);
+    }
   }
 }
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true);
+  delay(200);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   Serial.print("Connecting to Wi-Fi");
@@ -261,7 +284,7 @@ void connectWiFi() {
     // Synchronize time for the API timestamp.
     configTime(0, 0, "pool.ntp.org", "time.google.com");
   } else {
-    Serial.println("\nWi-Fi connection failed.");
+    Serial.println("\nWi-Fi connection failed. (If using iPhone, enable 'Maximize Compatibility')");
   }
 }
 
@@ -270,20 +293,31 @@ void connectWiFi() {
 void sendSensorData() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Upload skipped: Wi-Fi disconnected.");
+    static unsigned long lastReconnect = 0;
+    if (millis() - lastReconnect >= 15000) {
+      lastReconnect = millis();
+      Serial.println("Attempting Wi-Fi reconnect...");
+      WiFi.disconnect(true);
+      delay(200);
+      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    }
     return;
   }
 
-  // The backend requires a valid ISO-8601 timestamp.
+  // Generate ISO-8601 timestamp; use fallback if NTP is not yet synced
   time_t now = time(nullptr);
-  if (now < 1700000000) {
-    Serial.println("Upload skipped: waiting for NTP time sync.");
-    return;
+  char timestamp[30];
+  if (now >= 1700000000) {
+    struct tm timeInfo;
+    gmtime_r(&now, &timeInfo);
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &timeInfo);
+  } else {
+    // Fallback timestamp so data is never blocked while waiting for NTP
+    unsigned long sec = millis() / 1000;
+    snprintf(timestamp, sizeof(timestamp), "2026-10-26T%02lu:%02lu:%02luZ",
+             (sec / 3600) % 24, (sec / 60) % 60, sec % 60);
+    Serial.println("Note: NTP not yet synced; using relative timestamp.");
   }
-
-  struct tm timeInfo;
-  gmtime_r(&now, &timeInfo);
-  char timestamp[25];
-  strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &timeInfo);
 
   HTTPClient http;
   http.setTimeout(5000);
@@ -304,17 +338,10 @@ void sendSensorData() {
 
   JsonObject sensors = doc.createNestedObject("sensors");
 
-    // MQ-5 Gas Concentration (calibrated against baseline for leak detection)
-  float gasPpm = 5.0;
-  if (mqCalibrated && mq5Raw > mq5Baseline) {
-    gasPpm = 5.0 + ((float)(mq5Raw - mq5Baseline) * 0.8);
-  }
-  if (gasRisk && gasPpm < 60.0) {
-    gasPpm = 180.0;
-  }
+    // Send live calibrated gas concentration
   sensors["gas_ppm"] = gasPpm;
   sensors["mq5_adc"] = mq5Raw;
-  doc["gas_alert"] = gasRisk;
+  doc["gas_alert"] = isCriticalCondition() || gasRisk;
   doc["temperature_alert"] = temperatureRisk;
   doc["humidity_alert"] = humidityRisk;
   doc["current_alert"] = currentRisk;
@@ -335,14 +362,16 @@ void sendSensorData() {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("x-api-key", API_KEY);
 
+  Serial.print("Connecting to URL: ");
+  Serial.println(API_URL);
   Serial.println("Sending sensor data to HVAC backend...");
   int httpCode = http.POST(requestBody);
 
-  Serial.printf("Backend HTTP status: %d\\n", httpCode);
+  Serial.printf("Backend HTTP status: %d\n", httpCode);
   if (httpCode > 0) {
     Serial.println(http.getString());
   } else {
-    Serial.printf("HTTP error: %s\\n", http.errorToString(httpCode).c_str());
+    Serial.printf("HTTP error: %s\n", http.errorToString(httpCode).c_str());
   }
 
   http.end();
@@ -364,7 +393,8 @@ void setup() {
 
   pinMode(BUZZER_PIN, OUTPUT);
 
-  digitalWrite(BUZZER_PIN, LOW);
+  // Initialize buzzer to OFF (silent) at boot
+  digitalWrite(BUZZER_PIN, BUZZER_SOUND_OFF);
 
   Wire.begin(OLED_SDA, OLED_SCL);
 
@@ -392,7 +422,7 @@ void setup() {
 
   Serial.println("\nAC MONITORING PROTOTYPE");
   Serial.println("Serial Monitor: 115200 baud");
-  Serial.println("Commands: N G T H C X");
+  Serial.println("Commands: N (normal), G (gas alert), T (temp), H (humidity), C (current), X (clear), K (re-zero gas baseline)");
 
   Serial.println("PR2010 pressure sensor: GPIO32");
 
@@ -435,6 +465,19 @@ void readSensors() {
   gasRisk = mqCalibrated &&
             mq5Raw > mq5Baseline + MQ5_RISE_THRESHOLD;
 
+  // Calculate dynamic gas PPM in real-time
+  int rise = mq5Raw - mq5Baseline;
+  if (gasRisk || (mqCalibrated && rise > MQ5_RISE_THRESHOLD)) {
+    gasPpm = 60.0 + (rise > 0 ? (float)rise * 0.4 : 0.0);
+    if (gasPpm > 999.0) gasPpm = 999.0;
+  } else {
+    if (rise > 0 && MQ5_RISE_THRESHOLD > 0) {
+      gasPpm = 5.0 + ((float)rise / (float)MQ5_RISE_THRESHOLD) * 15.0;
+    } else {
+      gasPpm = 5.0;
+    }
+  }
+
   temperatureRisk = dhtConnected &&
                     temperature >= TEMP_LIMIT;
 
@@ -447,13 +490,25 @@ void readSensors() {
                 (1.0 + CURRENT_RISE_PERCENT / 100.0);
 
   // Safe software simulation for demonstration
-  if (testMode == 'G') gasRisk = true;
+  if (testMode == 'G') {
+    gasRisk = true;
+    gasPpm = 180.0;
+  }
   if (testMode == 'T') temperatureRisk = true;
   if (testMode == 'H') humidityRisk = true;
   if (testMode == 'C') currentRisk = true;
 
-  if (testMode == 'N' || testMode == 'X') {
-    // Use actual sensor-based status.
+  if (testMode == 'N') {
+    // Explicitly force all risks to false for testing clear normal state
+    gasRisk = false;
+    temperatureRisk = false;
+    humidityRisk = false;
+    currentRisk = false;
+    gasPpm = 5.0;
+  }
+
+  if (testMode == 'X') {
+    // Clear simulation mode; use actual sensor readings
   }
 }
 
@@ -466,10 +521,24 @@ int riskCount() {
          (currentRisk ? 1 : 0);
 }
 
+// Critical condition check:
+// The buzzer sounds ONLY for genuine safety-critical emergencies:
+// 1. Gas / refrigerant leak detected by MQ-5 sensor (gasRisk)
+// 2. Severe compressor thermal breach (temperature >= 40.0 C)
+// Environmental variations (humidity, current fluctuations) are classified
+// as WARNING only and will NEVER sound the buzzer.
+bool isCriticalCondition() {
+  if (gasRisk) return true;
+  if (mqCalibrated && mq5Raw > (mq5Baseline + MQ5_RISE_THRESHOLD)) return true;
+  if (temperatureRisk && temperature >= 40.0) return true;
+  return false;
+}
+
 const char* getStatus() {
+  // Critical emergencies take absolute precedence
+  if (isCriticalCondition()) return "CRITICAL";
   if (!dhtConnected) return "SENSOR ERROR";
-  if (riskCount() >= 2) return "HIGH RISK";
-  if (riskCount() == 1) return "WARNING";
+  if (riskCount() >= 1) return "WARNING";
 
   return "NORMAL";
 }
@@ -543,7 +612,10 @@ void updateOLED() {
 
     display.setCursor(0, 18);
     display.print("ADC: ");
-    display.println(mq5Raw);
+    display.print(mq5Raw);
+    display.print(" (");
+    display.print(gasPpm, 1);
+    display.println(")");
 
     display.setCursor(0, 32);
     display.print("Baseline: ");
@@ -613,6 +685,7 @@ void printSerial() {
 
   Serial.printf("MQ5 ADC: %d\n", mq5Raw);
   Serial.printf("MQ5 baseline: %d\n", mq5Baseline);
+  Serial.printf("Gas concentration: %.1f ppm\n", gasPpm);
   Serial.printf("Current: %.2f A\n", current);
   Serial.printf("Current baseline: %.2f A\n", currentBaseline);
 
@@ -644,8 +717,11 @@ void printSerial() {
   Serial.print("OVERALL STATUS: ");
   Serial.println(getStatus());
 
+  Serial.print("CRITICAL CONDITION: ");
+  Serial.println(isCriticalCondition() ? "YES (DANGER)" : "NO (SAFE)");
+
   Serial.print("BUZZER: ");
-  Serial.println(riskCount() > 0 ? "ON" : "OFF");
+  Serial.println(isCriticalCondition() ? "ON (ALARM)" : "OFF (SILENT)");
 
   Serial.println("------------------------------");
 }
@@ -662,10 +738,11 @@ void loop() {
 
     readSensors();
 
-    // Buzzer responds to the existing risk conditions.
+    // Buzzer rings ONLY during CRITICAL condition (e.g. refrigerant leak or multi-fault emergency).
+    // Remains completely silent during NORMAL and WARNING states.
     digitalWrite(
       BUZZER_PIN,
-      riskCount() > 0 ? HIGH : LOW
+      isCriticalCondition() ? BUZZER_SOUND_ON : BUZZER_SOUND_OFF
     );
 
     updateOLED();

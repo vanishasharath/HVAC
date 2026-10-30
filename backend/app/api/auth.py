@@ -28,4 +28,6 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "email": current_user["email"],
         "full_name": current_user["full_name"],
         "role": current_user["role"],
+        "phone_number": current_user.get("phone_number"),
+        "phone_verified": current_user.get("phone_verified", False),
     }
